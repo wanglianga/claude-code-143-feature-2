@@ -5,7 +5,9 @@ import Login from './pages/Login';
 import JobHall from './pages/worker/JobHall';
 import JobDetail from './pages/worker/JobDetail';
 import MyTasks from './pages/worker/MyTasks';
+import MyClaims from './pages/worker/MyClaims';
 import TaskRoom from './pages/TaskRoom';
+import ClaimDetail from './pages/ClaimDetail';
 import Profile from './pages/worker/Profile';
 import MyAppeals from './pages/worker/MyAppeals';
 import EntDashboard from './pages/enterprise/EntDashboard';
@@ -13,6 +15,7 @@ import PostJob from './pages/enterprise/PostJob';
 import ManageJobs from './pages/enterprise/ManageJobs';
 import JobApplicants from './pages/enterprise/JobApplicants';
 import EntAppeals from './pages/enterprise/EntAppeals';
+import EntClaims from './pages/enterprise/EntClaims';
 import FieldBoard from './pages/enterprise/FieldBoard';
 import SupportAppeals from './pages/support/SupportAppeals';
 import AppealDesk from './pages/support/AppealDesk';
@@ -23,6 +26,7 @@ const roleNav: Record<string, { to: string; label: string }[]> = {
   WORKER: [
     { to: '/jobs', label: '岗位大厅' },
     { to: '/my/tasks', label: '我的任务' },
+    { to: '/my/claims', label: '我的工伤' },
     { to: '/my/appeals', label: '我的申诉' },
     { to: '/profile', label: '实名资料' },
   ],
@@ -31,10 +35,12 @@ const roleNav: Record<string, { to: string; label: string }[]> = {
     { to: '/ent/post', label: '发布需求' },
     { to: '/ent/jobs', label: '岗位管理' },
     { to: '/ent/field', label: '现场工作台' },
+    { to: '/ent/claims', label: '工伤处理' },
     { to: '/ent/appeals', label: '争议处理' },
   ],
   SUPERVISOR: [
     { to: '/ent/field', label: '现场确认台' },
+    { to: '/ent/claims', label: '工伤处理' },
     { to: '/ent/jobs', label: '本企业岗位' },
   ],
   SUPPORT: [
@@ -71,15 +77,18 @@ function Shell() {
           <Route path="/jobs" element={<JobHall />} />
           <Route path="/jobs/:id" element={<JobDetail />} />
           <Route path="/my/tasks" element={<MyTasks />} />
+          <Route path="/my/claims" element={<MyClaims />} />
           <Route path="/my/appeals" element={<MyAppeals />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/room/:id" element={<TaskRoom />} />
+          <Route path="/claims/:id" element={<ClaimDetail />} />
 
           <Route path="/ent" element={<EntDashboard />} />
           <Route path="/ent/post" element={<PostJob />} />
           <Route path="/ent/jobs" element={<ManageJobs />} />
           <Route path="/ent/jobs/:id/applicants" element={<JobApplicants />} />
           <Route path="/ent/appeals" element={<EntAppeals />} />
+          <Route path="/ent/claims" element={<EntClaims />} />
           <Route path="/ent/field" element={<FieldBoard />} />
 
           <Route path="/support/appeals" element={<SupportAppeals />} />

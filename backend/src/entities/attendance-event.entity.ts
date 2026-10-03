@@ -75,6 +75,10 @@ export class AttendanceEvent {
   @Column({ type: 'boolean', default: false })
   allPassed: boolean;
 
+  // 平台事后追查认定的实际到岗（用于工资/责任认定）；保险生效时间不因此追溯，禁止事后补录保险
+  @Column({ type: 'boolean', default: false })
+  retroRecognized: boolean;
+
   @Column({ length: 255, nullable: true })
   failReason: string | null;
 

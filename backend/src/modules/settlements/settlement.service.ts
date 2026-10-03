@@ -24,8 +24,12 @@ export class SettlementService {
     @InjectDataSource() private ds: DataSource,
   ) {}
 
-  /** 根据有效工时、加班、迟到、餐补、扣款、预付款、服务费生成/重算日结明细（幂等） */
-  async generate(assignmentId: number): Promise<Settlement> {
+  /**
+   * 根据有效工时、加班、迟到、餐补、扣款、预付款、服务费生成/重算日结明细（幂等）
+   * opts.injuryStop：工伤离场——工人未完工签退，按「到岗至事故发生」的已完成工时结算，
+   *                  医疗垫付与责任判定不在此单内，由理赔流程单独跟进。
+   */
+  async generate(assignmentId: number, opts: { injuryStop?: boolean } = {}): Promise<Settlement> {
     const assignment = await this.assignments.findOne({ where: { id: assignmentId } });
     if (!assignment) throw new BadRequestException('派单不存在');
     const job = await this.jobs.findOne({ where: { id: assignment.jobId } });
@@ -34,12 +38,23 @@ export class SettlementService {
     const checkIn = await this.attendance.findOne({
       where: { assignmentId, kind: 'CHECK_IN', allPassed: true },
       order: { eventTime: 'ASC' },
-    });
+    }) ?? (opts.injuryStop
+      ? await this.attendance.findOne({
+        where: { assignmentId, kind: 'CHECK_IN', retroRecognized: true },
+        order: { eventTime: 'ASC' },
+      })
+      : null);
     const checkOut = await this.attendance.findOne({
       where: { assignmentId, kind: 'CHECK_OUT', allPassed: true },
       order: { eventTime: 'DESC' },
     });
-    if (!checkIn) throw new BadRequestException('尚无有效到岗签到记录，无法结算');
+    if (!checkIn) {
+      throw new BadRequestException(
+        opts.injuryStop
+          ? '无有效到岗（含平台事后认定）记录，无法按已完成工时结算，请先追查考勤'
+          : '尚无有效到岗签到记录，无法结算',
+      );
+    }
 
     const scheduledStart = new Date(job.startTime);
     const scheduledEnd = new Date(job.endTime);
@@ -59,7 +74,33 @@ export class SettlementService {
     const earlyLeaveEvent = events.find((e) => e.type === 'EARLY_LEAVE');
     const earlyLeaveMinutes = earlyLeaveEvent?.minutes || 0;
     const clockMinutes = checkOut ? Math.max(0, minutesBetween(checkIn.eventTime, checkOut.eventTime)) : 0;
-    const workMinutes = checkOut ? Math.max(0, scheduledMinutes - earlyLeaveMinutes) : scheduledMinutes;
+
+    // 工伤离场：以主管确认的工伤事故时间截断，日结工资先按已完成工时结算
+    let injuryStopNote: string | null = null;
+    let workMinutes: number;
+    if (checkOut) {
+      workMinutes = Math.max(0, scheduledMinutes - earlyLeaveMinutes);
+    } else if (opts.injuryStop) {
+      // 事故时间是客观事实，即使主管未批准工伤事件（考勤缺失场景），仍以事故时间截断工时
+      const anyInjury = await this.jobEvents.findOne({
+        where: { assignmentId, type: 'INJURY' },
+        order: { occurredAt: 'ASC' },
+      });
+      const injuryEvent = events.find((e) => e.type === 'INJURY') || anyInjury;
+      if (injuryEvent) {
+        const worked = Math.max(
+          0,
+          Math.min(scheduledMinutes, minutesBetween(checkIn.eventTime, injuryEvent.occurredAt)),
+        );
+        workMinutes = worked;
+        injuryStopNote = `工伤离场，按到岗至事故的已完成工时 ${worked} 分钟先行结算`
+          + '（医疗垫付、保险理赔与责任判定单独跟进，不随工资结案）';
+      } else {
+        workMinutes = scheduledMinutes;
+      }
+    } else {
+      workMinutes = scheduledMinutes;
+    }
     void clockMinutes;
 
     // 已审批事件
@@ -83,6 +124,7 @@ export class SettlementService {
     const deductionReason = [
       lateMinutes > 0 ? `迟到 ${lateMinutes} 分钟扣款` : null,
       earlyLeaveEvent ? `早退 ${earlyLeaveEvent.minutes || 0} 分钟（已按实际工时折算）` : null,
+      injuryStopNote,
     ].filter(Boolean).join('；') || null;
 
     const workerPayable = round2(
@@ -124,6 +166,15 @@ export class SettlementService {
       status: settlement.status === 'PAID' || settlement.status === 'ADJUSTED' ? settlement.status : 'DRAFT',
     });
     return this.settlements.save(settlement);
+  }
+
+  /**
+   * 工伤先行结算：工人因伤无法继续作业（无完工签退），按「到岗至事故发生」的
+   * 已完成工时生成/重算日结明细。工资先结；医疗垫付、保险理赔与责任判定由理赔单
+   * 单独跟进，互不阻塞、互不替代。
+   */
+  async generateForInjury(assignmentId: number): Promise<Settlement> {
+    return this.generate(assignmentId, { injuryStop: true });
   }
 
   /** 企业确认并发放日结（支持批量，按岗位） */

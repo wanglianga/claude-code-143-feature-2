@@ -48,9 +48,21 @@ export class JobEvent {
   @Column({ length: 64, nullable: true })
   newPosition: string | null;
 
+  // 受伤时所在岗位（如：展台搭建帮工-桁架组）
+  @Column({ length: 64, nullable: true })
+  workPosition: string | null;
+
   // 现场照片
   @Column({ type: 'text', nullable: true })
   photoUrl: string | null;
+
+  // 现场照片补充（多角度，演示用逗号分隔的 mock 地址）
+  @Column({ type: 'text', nullable: true })
+  extraPhotoUrls: string | null;
+
+  // 就医票据（挂号/检查/药品等，演示用逗号分隔的 mock 地址）
+  @Column({ type: 'text', nullable: true })
+  medicalReceiptUrls: string | null;
 
   // 定位（证明现场上报）
   @Column({ type: 'decimal', precision: 10, scale: 6, nullable: true })

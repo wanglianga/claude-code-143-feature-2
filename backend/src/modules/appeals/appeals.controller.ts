@@ -60,16 +60,4 @@ export class AppealsController {
   ) {
     return this.appeals.arbitrate(req.user.sub, Number(id), dto.award, Number(dto.reissueAmount || 0));
   }
-
-  @Roles('SUPPORT')
-  @Get('support/claims')
-  claims() {
-    return this.appeals.listClaims();
-  }
-
-  @Roles('SUPPORT')
-  @Post('support/claims/:id/adjust')
-  adjust(@Param('id') id: string, @Body() dto: { approve: boolean; note: string }) {
-    return this.appeals.adjustClaim(Number(id), !!dto.approve, dto.note);
-  }
 }

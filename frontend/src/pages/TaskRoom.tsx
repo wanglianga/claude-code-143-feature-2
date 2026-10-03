@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { useAuth } from '../auth';
 import {
-  Alert, Badge, EventTypeTag, Field, Modal, Spinner, StatusBadge,
+  Alert, Badge, ClaimStatusBadge, EventTypeTag, Field, Modal, Spinner, StatusBadge,
   fmtDateTime, fmtMoney,
 } from '../components/ui';
 
@@ -177,10 +177,34 @@ function InsuranceCard({ room }: { room: any }) {
         <Alert kind="warn">保险尚未生效：未完成「定位 + 人脸 + 二维码 + 主管确认」四重到岗校验前发生事故不在保障范围，且平台禁止事后补录。</Alert>
       )}
       {room.claim && (
-        <Alert kind={room.claim.coveredAtOccurrence ? 'ok' : 'error'}>
-          工伤理赔单：{room.claim.injuryDesc} — {room.claim.coveredAtOccurrence
-            ? '事故时保险在保障期内' : '事故时保险未生效，不予赔付，且不可事后补录'}（{room.claim.status}）
-        </Alert>
+        <div style={{ marginTop: 10 }}>
+          <Alert kind={room.claim.coveredAtOccurrence ? 'ok' : 'error'}>
+            <div className="row">
+              <span>
+                工伤理赔单 #{room.claim.id}：{room.claim.injuryDesc} — {room.claim.coveredAtOccurrence
+                  ? '事故时保险在保障期内' : '事故时保险未生效，保险不予赔付，且不可事后补录（医疗垫付/责任仍单独跟进）'}
+                （<ClaimStatusBadge status={room.claim.status} />）
+              </span>
+              <div className="spacer" />
+              <Link className="btn btn-sm btn-primary" to={`/claims/${room.claim.id}`}>进入理赔单</Link>
+            </div>
+          </Alert>
+          {room.claimFollowUps?.length > 0 && (
+            <div className="timeline" style={{ marginTop: 8 }}>
+              {room.claimFollowUps.slice(-3).map((f: any) => (
+                <div key={f.id} className="t-item">
+                  <div className="row">
+                    <b className="small">{f.operatorName}</b>
+                    <span className="small muted">{fmtDateTime(f.createdAt)}</span>
+                    <div className="spacer" />
+                    {f.nextAction && <span className="small" style={{ color: 'var(--orange)' }}>下一步：{f.nextAction}</span>}
+                  </div>
+                  <div className="small">{f.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -299,6 +323,8 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
   const [minutes, setMinutes] = useState(60);
   const [newPosition, setNewPosition] = useState('');
   const [claimAmount, setClaimAmount] = useState(5000);
+  const [workPosition, setWorkPosition] = useState('');
+  const [receipts, setReceipts] = useState('');
 
   const submit = async () => {
     await onAct(() => post('/events', {
@@ -306,9 +332,12 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
       minutes: ['OVERTIME', 'EARLY_LEAVE', 'EXTRA_CARRY'].includes(type) ? Number(minutes) : undefined,
       newPosition: type === 'POSITION_CHANGE' ? newPosition : undefined,
       claimAmount: type === 'INJURY' ? Number(claimAmount) : undefined,
-      lat: room.job.lat, lng: room.job.lng, photoUrl: `mock://event-${Date.now()}`,
+      workPosition: type === 'INJURY' ? workPosition : undefined,
+      extraPhotoUrls: type === 'INJURY' ? `mock://event-${Date.now()}-b,mock://event-${Date.now()}-c` : undefined,
+      medicalReceiptUrls: type === 'INJURY' && receipts.trim() ? receipts.trim() : undefined,
+      lat: room.job.lat, lng: room.job.lng, photoUrl: `mock://event-${Date.now()}-a`,
     }), '事件已现场实时上报（服务器时间不可篡改）');
-    setOpen(false); setDesc('');
+    setOpen(false); setDesc(''); setWorkPosition(''); setReceipts('');
   };
 
   return (
@@ -341,7 +370,12 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
                 </div>
               )}
             </div>
-            <div className="small" style={{ marginTop: 4 }}>{e.description} {e.photoUrl && '📷'}</div>
+            <div className="small" style={{ marginTop: 4 }}>
+              {e.description}
+              {e.workPosition && <> · <b>岗位：{e.workPosition}</b></>}
+              {e.photoUrl && ' 📷现场照片'}{e.extraPhotoUrls && ` +${e.extraPhotoUrls.split(',').length}张`}
+              {e.medicalReceiptUrls && ` · 🧾就医票据 ${e.medicalReceiptUrls.split(',').length} 张`}
+            </div>
             {e.reviewNote && <div className="small muted">审核备注：{e.reviewNote}</div>}
           </div>
         ))}
@@ -367,8 +401,19 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
           )}
           {type === 'INJURY' && (
             <>
+              <Alert kind="error">
+                工伤现场上报：请如实填写受伤岗位并拍摄现场照片（自动附加定位与服务器时间）。
+                系统将即时判定事故时点保险是否生效；未完成四重到岗校验的事故保险不能赔付，且不可事后补录。
+              </Alert>
+              <Field label="受伤时所在岗位（必填）">
+                <input className="input" value={workPosition} onChange={(e) => setWorkPosition(e.target.value)}
+                  placeholder="如：展台搭建-桁架组 / 冷库装卸组" />
+              </Field>
               <Field label="预估理赔金额（元）"><input className="input" type="number" value={claimAmount} onChange={(e) => setClaimAmount(Number(e.target.value))} /></Field>
-              <Alert kind="info">系统将即时判定事故时点保险是否在保障期内；未完成四重到岗校验的事故不能理赔。</Alert>
+              <Field label="就医票据标识（选填，可后补，逗号分隔）">
+                <input className="input" value={receipts} onChange={(e) => setReceipts(e.target.value)}
+                  placeholder="如 mock://guahao,mock://xray；没有可留空，治疗后在理赔单补交" />
+              </Field>
             </>
           )}
         </Modal>

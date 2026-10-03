@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
   Appeal, Assignment, Job, Enterprise, AttendanceEvent, JobEvent, ChatMessage,
-  Settlement, InsurancePolicy, InjuryClaim,
+  Settlement, InsurancePolicy,
 } from '../../entities';
 import { SettlementService } from '../settlements/settlement.service';
 import { EnterpriseService } from '../enterprise/enterprise.service';
@@ -19,7 +19,6 @@ export class AppealsService {
     @InjectRepository(JobEvent) private jobEvents: Repository<JobEvent>,
     @InjectRepository(ChatMessage) private messages: Repository<ChatMessage>,
     @InjectRepository(Settlement) private settlements: Repository<Settlement>,
-    @InjectRepository(InjuryClaim) private claims: Repository<InjuryClaim>,
     private settlementService: SettlementService,
     private entService: EnterpriseService,
   ) {}
@@ -176,22 +175,5 @@ export class AppealsService {
       await this.enterprises.save(ent);
       await this.entService.recomputeRisk(appeal.enterpriseId);
     }
-  }
-
-  // ---------- 客服：工伤理赔复核 ----------
-  async listClaims() {
-    return this.claims.find({ order: { id: 'DESC' } });
-  }
-
-  async adjustClaim(claimId: number, approve: boolean, note: string) {
-    const claim = await this.claims.findOne({ where: { id: claimId } });
-    if (!claim) throw new NotFoundException('理赔单不存在');
-    // coveredAtOccurrence 是事故时点的不可变事实：不允许通过客服复核把未生效保单变成赔付
-    if (approve && !claim.coveredAtOccurrence) {
-      throw new BadRequestException('事故发生时保险未生效，禁止赔付——平台不允许事故后补录保险');
-    }
-    claim.status = approve ? 'APPROVED' : 'REJECTED';
-    claim.adjusterNote = `${claim.adjusterNote || ''}\n客服复核：${note || '无'}`.trim();
-    return this.claims.save(claim);
   }
 }

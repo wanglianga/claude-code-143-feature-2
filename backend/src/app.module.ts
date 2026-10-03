@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { config } from './config';
 import {
   User, Enterprise, Job, Assignment, AttendanceEvent, InsurancePolicy,
-  JobEvent, InjuryClaim, ChatMessage, Settlement, Appeal, Review,
+  JobEvent, InjuryClaim, ClaimFollowUp, ChatMessage, Settlement, Appeal, Review,
 } from './entities';
 import { AuthModule } from './modules/auth/auth.module';
 import { RiskModule } from './modules/risk/risk.module';
@@ -12,6 +12,7 @@ import { SettlementModule } from './modules/settlements/settlement.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { AppealsModule } from './modules/appeals/appeals.module';
+import { ClaimsModule } from './modules/claims/claims.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 
@@ -26,7 +27,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
       database: config.db.database,
       entities: [
         User, Enterprise, Job, Assignment, AttendanceEvent, InsurancePolicy,
-        JobEvent, InjuryClaim, ChatMessage, Settlement, Appeal, Review,
+        JobEvent, InjuryClaim, ClaimFollowUp, ChatMessage, Settlement, Appeal, Review,
       ],
       synchronize: true,
       charset: 'utf8mb4',
@@ -41,6 +42,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     TasksModule,
     JobsModule,
     AppealsModule,
+    ClaimsModule,
     ReviewsModule,
     DashboardModule,
   ],

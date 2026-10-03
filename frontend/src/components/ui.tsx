@@ -32,7 +32,10 @@ export function StatusBadge({ status }: { status: string }) {
     PAID: { tone: 'green', text: '已发放' },
     ADJUSTED: { tone: 'purple', text: '申诉调整' },
     REPORTED: { tone: 'orange', text: '已报案' },
-    INVESTIGATING: { tone: 'blue', text: '调查中' },
+    RECORDED: { tone: 'blue', text: '已记录待报案' },
+    INVESTIGATING: { tone: 'blue', text: '理赔调查中' },
+    MATERIALS_PENDING: { tone: 'orange', text: '资料待补' },
+    CLOSED: { tone: 'gray', text: '已结案' },
     UPHELD: { tone: 'gray', text: '维持扣款' },
     REISSUED: { tone: 'green', text: '裁决补发' },
     ARBITRATION: { tone: 'purple', text: '仲裁中' },
@@ -45,6 +48,21 @@ export function StatusBadge({ status }: { status: string }) {
 export function RiskLevel({ level }: { level: number }) {
   const tone = level >= 4 ? 'red' : level >= 3 ? 'orange' : level === 2 ? 'blue' : 'green';
   return <Badge tone={tone as any}>风险 L{level}</Badge>;
+}
+
+// 工伤理赔单状态（REJECTED 在派单语境为"未录取"，故理赔单独成图）
+export function ClaimStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { tone: any; text: string }> = {
+    RECORDED: { tone: 'blue', text: '已记录·待报案' },
+    REPORTED: { tone: 'orange', text: '已报案' },
+    INVESTIGATING: { tone: 'blue', text: '理赔调查中' },
+    MATERIALS_PENDING: { tone: 'orange', text: '资料待补' },
+    APPROVED: { tone: 'green', text: '保险赔付' },
+    REJECTED: { tone: 'red', text: '保险拒赔' },
+    CLOSED: { tone: 'gray', text: '已结案' },
+  };
+  const m = map[status] || { tone: 'gray', text: status };
+  return <Badge tone={m.tone}>{m.text}</Badge>;
 }
 
 export function EventTypeTag({ type }: { type: string }) {

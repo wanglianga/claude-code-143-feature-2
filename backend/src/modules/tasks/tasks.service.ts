@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import {
   User, Enterprise, Job, Assignment, AttendanceEvent, InsurancePolicy,
-  JobEvent, InjuryClaim, ChatMessage, Settlement,
+  JobEvent, InjuryClaim, ClaimFollowUp, ChatMessage, Settlement,
 } from '../../entities';
 import { INDUSTRIES } from '../../risk.constants';
 import { haversineMeters } from '../../geo';
@@ -41,6 +41,7 @@ export class TasksService {
     @InjectRepository(InsurancePolicy) private policies: Repository<InsurancePolicy>,
     @InjectRepository(JobEvent) private jobEvents: Repository<JobEvent>,
     @InjectRepository(InjuryClaim) private claims: Repository<InjuryClaim>,
+    @InjectRepository(ClaimFollowUp) private followUps: Repository<ClaimFollowUp>,
     @InjectRepository(ChatMessage) private messages: Repository<ChatMessage>,
     @InjectRepository(Settlement) private settlements: Repository<Settlement>,
     private settlementService: SettlementService,
@@ -60,6 +61,9 @@ export class TasksService {
     const policy = await this.policies.findOne({ where: { assignmentId } });
     const events = await this.jobEvents.find({ where: { assignmentId }, order: { occurredAt: 'DESC' } });
     const claim = await this.claims.findOne({ where: { assignmentId }, order: { id: 'DESC' } });
+    const claimFollowUps = claim
+      ? await this.followUps.find({ where: { claimId: claim.id }, order: { id: 'ASC' } })
+      : [];
     const msgs = await this.messages.find({ where: { assignmentId }, order: { id: 'ASC' }, take: 200 });
     const settlement = await this.settlements.findOne({ where: { assignmentId } });
 
@@ -78,6 +82,7 @@ export class TasksService {
       policy,
       events,
       claim,
+      claimFollowUps,
       messages: msgs,
       settlement,
     };
@@ -322,6 +327,7 @@ export class TasksService {
       assignmentId: number; type: any; description: string;
       minutes?: number; newPosition?: string; photoUrl?: string; lat?: number; lng?: number;
       claimAmount?: number;
+      workPosition?: string; extraPhotoUrls?: string; medicalReceiptUrls?: string;
     },
   ) {
     const assignment = await this.assignments.findOne({ where: { id: dto.assignmentId, workerId } });
@@ -331,6 +337,9 @@ export class TasksService {
       throw new BadRequestException('只有作业中的任务可以上报该事件（工资争议可在结算后发起申诉）');
     }
     if (!dto.description?.trim()) throw new BadRequestException('请填写事件描述');
+    if (dto.type === 'INJURY' && !dto.workPosition?.trim()) {
+      throw new BadRequestException('工伤上报需填写受伤时所在岗位');
+    }
 
     // occurredAt 一律取服务器当前时间——现场实时上报，禁止事后补录篡改时间
     const event = await this.jobEvents.save(this.jobEvents.create({
@@ -342,7 +351,10 @@ export class TasksService {
       occurredAt: new Date(),
       minutes: dto.minutes ?? null,
       newPosition: dto.newPosition ?? null,
+      workPosition: dto.workPosition?.trim() || null,
       photoUrl: dto.photoUrl ?? null,
+      extraPhotoUrls: dto.extraPhotoUrls?.trim() || null,
+      medicalReceiptUrls: dto.medicalReceiptUrls?.trim() || null,
       lat: dto.lat ?? null,
       lng: dto.lng ?? null,
       status: 'PENDING',
@@ -355,8 +367,10 @@ export class TasksService {
       const covered = !!policy &&
         policy.status === 'ACTIVE' &&
         !!policy.effectiveFrom &&
-        new Date() >= new Date(policy.effectiveFrom) &&
-        (!policy.effectiveTo || new Date() <= new Date(policy.effectiveTo));
+        event.occurredAt >= new Date(policy.effectiveFrom) &&
+        (!policy.effectiveTo || event.occurredAt <= new Date(policy.effectiveTo));
+      const worker = await this.users.findOne({ where: { id: workerId } });
+      // 事故现场记录（RECORDED）：客服据此发起保险报案，报案前先固化六要素
       claim = await this.claims.save(this.claims.create({
         assignmentId: assignment.id,
         jobId: job.id,
@@ -365,12 +379,26 @@ export class TasksService {
         jobEventId: event.id,
         insurancePolicyId: policy?.id ?? 0,
         injuryDesc: dto.description,
+        accidentAt: new Date(event.occurredAt),
+        workPosition: dto.workPosition?.trim() || null,
+        scenePhotoUrls: [dto.photoUrl, dto.extraPhotoUrls].filter(Boolean).join(','),
+        medicalReceiptUrls: dto.medicalReceiptUrls?.trim() || null,
         claimAmount: dto.claimAmount || 5000,
-        status: 'INVESTIGATING',
+        status: 'RECORDED',
         coveredAtOccurrence: covered,
         adjusterNote: covered
-          ? '事故发生于保险保障期内，进入理赔调查'
+          ? '事故发生于保险保障期内，已完成现场记录，等待主管确认工伤事实后由客服发起报案'
           : '事故发生时保险未生效（未完成四重到岗校验或企业未确认），不在保障范围，且平台禁止事后补录保险',
+      }));
+      await this.followUps.save(this.followUps.create({
+        claimId: claim.id,
+        type: 'RECORD',
+        content: `工人 ${worker?.name || workerId} 现场上报工伤：${dto.description}` +
+          `；岗位：${dto.workPosition}；事故时间以平台服务器时间 ${new Date(event.occurredAt).toLocaleString('zh-CN')} 为准` +
+          `${dto.medicalReceiptUrls ? '；已上传就医票据' : '；就医票据待补'}`,
+        attachmentUrls: [dto.photoUrl, dto.extraPhotoUrls, dto.medicalReceiptUrls].filter(Boolean).join(',') || null,
+        operatorId: workerId, operatorRole: 'WORKER', operatorName: worker?.name || `工人#${workerId}`,
+        nextAction: '等待现场主管确认工伤事实',
       }));
     }
 
@@ -394,18 +422,41 @@ export class TasksService {
     if (event.type === 'INJURY') {
       claim = await this.claims.findOne({ where: { jobEventId: event.id } });
       if (claim) {
-        // coveredAtOccurrence 不可变——即使主管批准事件，保险不赔就是不赔
-        claim.status = approve
-          ? (claim.coveredAtOccurrence ? 'APPROVED' : 'REJECTED')
-          : 'REJECTED';
-        claim.adjusterNote = `${claim.adjusterNote || ''}\n主管${approve ? '确认' : '驳回'}工伤事件：${note || '无备注'}`.trim();
-        await this.claims.save(claim);
         if (approve) {
+          // 主管确认的是「工伤事实」，不替保险做赔付结论；理赔状态推进到待客服报案
+          claim.supervisorConfirmed = true;
+          claim.supervisorConfirmedBy = user.sub;
+          claim.supervisorConfirmedAt = new Date();
+          claim.supervisorNote = note || '现场确认工伤情况属实';
+          if (claim.status === 'RECORDED') {
+            claim.adjusterNote = `${claim.adjusterNote || ''}\n主管已确认工伤事实，等待客服发起保险报案`.trim();
+          }
+          await this.claims.save(claim);
+          await this.followUps.save(this.followUps.create({
+            claimId: claim.id,
+            type: 'SUPERVISOR_CONFIRM',
+            content: `现场主管确认工伤事实：${note || '情况属实'}`,
+            operatorId: user.sub, operatorRole: user.role,
+            nextAction: claim.coveredAtOccurrence
+              ? '客服核对六要素后向保险公司发起报案'
+              : '事故时保险未生效，客服仍需立案跟进医疗垫付与责任判定（保险不可赔付）',
+          }));
           // 真实发生工伤即计入企业风险画像（不论保险是否赔付）
           const ent = await this.entService.get(job.enterpriseId);
           ent.injuryJobs += 1;
           await this.enterprises.save(ent);
           await this.entService.recomputeRisk(job.enterpriseId);
+        } else {
+          claim.supervisorNote = `主管驳回工伤事件：${note || '无备注'}`;
+          claim.adjusterNote = `${claim.adjusterNote || ''}\n主管驳回工伤事件：${note || '无备注'}（客服仍可人工核查）`.trim();
+          await this.claims.save(claim);
+          await this.followUps.save(this.followUps.create({
+            claimId: claim.id,
+            type: 'SUPERVISOR_CONFIRM',
+            content: `现场主管驳回工伤事件：${note || '情况不属实'}（平台客服将人工核查，事故仍持续跟进）`,
+            operatorId: user.sub, operatorRole: user.role,
+            nextAction: '客服人工复核现场照片/考勤/聊天记录',
+          }));
         }
       }
     }
