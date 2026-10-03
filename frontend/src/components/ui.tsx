@@ -33,6 +33,12 @@ export function StatusBadge({ status }: { status: string }) {
     ADJUSTED: { tone: 'purple', text: '申诉调整' },
     REPORTED: { tone: 'orange', text: '已报案' },
     INVESTIGATING: { tone: 'blue', text: '调查中' },
+    WAITING_DOCS: { tone: 'orange', text: '待补资料' },
+    DOCS_SUBMITTED: { tone: 'blue', text: '资料待审核' },
+    CONFIRMED: { tone: 'blue', text: '主管已确认' },
+    DISPUTED: { tone: 'red', text: '工伤存疑' },
+    CLAIM_TRACKING: { tone: 'purple', text: '理赔跟进中' },
+    CLOSED: { tone: 'gray', text: '已关闭' },
     UPHELD: { tone: 'gray', text: '维持扣款' },
     REISSUED: { tone: 'green', text: '裁决补发' },
     ARBITRATION: { tone: 'purple', text: '仲裁中' },
@@ -45,6 +51,20 @@ export function StatusBadge({ status }: { status: string }) {
 export function RiskLevel({ level }: { level: number }) {
   const tone = level >= 4 ? 'red' : level >= 3 ? 'orange' : level === 2 ? 'blue' : 'green';
   return <Badge tone={tone as any}>风险 L{level}</Badge>;
+}
+
+export function CaseStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { tone: any; text: string }> = {
+    DRAFT: { tone: 'orange', text: '待主管确认' },
+    CONFIRMED: { tone: 'blue', text: '主管已确认·待报案' },
+    DISPUTED: { tone: 'red', text: '工伤存疑' },
+    REPORTED: { tone: 'purple', text: '已报案（未生效另案）' },
+    CLAIM_TRACKING: { tone: 'purple', text: '理赔跟进中' },
+    SETTLED: { tone: 'green', text: '理赔已结案' },
+    CLOSED: { tone: 'gray', text: '已关闭' },
+  };
+  const m = map[status] || { tone: 'gray', text: status };
+  return <Badge tone={m.tone}>{m.text}</Badge>;
 }
 
 export function EventTypeTag({ type }: { type: string }) {

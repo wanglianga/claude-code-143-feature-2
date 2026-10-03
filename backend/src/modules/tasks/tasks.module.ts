@@ -7,6 +7,7 @@ import {
 import { TasksService } from './tasks.service';
 import { TasksController } from './tasks.controller';
 import { SettlementModule } from '../settlements/settlement.module';
+import { InjuriesModule } from '../injuries/injuries.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SettlementModule } from '../settlements/settlement.module';
       JobEvent, InjuryClaim, ChatMessage, Settlement,
     ]),
     SettlementModule,
+    InjuriesModule,
   ],
   providers: [TasksService],
   controllers: [TasksController],

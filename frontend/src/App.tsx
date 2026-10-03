@@ -16,13 +16,17 @@ import EntAppeals from './pages/enterprise/EntAppeals';
 import FieldBoard from './pages/enterprise/FieldBoard';
 import SupportAppeals from './pages/support/SupportAppeals';
 import AppealDesk from './pages/support/AppealDesk';
-import ClaimsDesk from './pages/support/ClaimsDesk';
+import InjuryDesk from './pages/support/InjuryDesk';
+import InjuryCasePage from './pages/InjuryCasePage';
+import MyInjuries from './pages/worker/MyInjuries';
+import EntInjuries from './pages/enterprise/EntInjuries';
 import RiskOverview from './pages/support/RiskOverview';
 
 const roleNav: Record<string, { to: string; label: string }[]> = {
   WORKER: [
     { to: '/jobs', label: '岗位大厅' },
     { to: '/my/tasks', label: '我的任务' },
+    { to: '/my/injuries', label: '我的工伤' },
     { to: '/my/appeals', label: '我的申诉' },
     { to: '/profile', label: '实名资料' },
   ],
@@ -31,15 +35,17 @@ const roleNav: Record<string, { to: string; label: string }[]> = {
     { to: '/ent/post', label: '发布需求' },
     { to: '/ent/jobs', label: '岗位管理' },
     { to: '/ent/field', label: '现场工作台' },
+    { to: '/ent/injuries', label: '工伤跟进' },
     { to: '/ent/appeals', label: '争议处理' },
   ],
   SUPERVISOR: [
     { to: '/ent/field', label: '现场确认台' },
+    { to: '/ent/injuries', label: '工伤确认' },
     { to: '/ent/jobs', label: '本企业岗位' },
   ],
   SUPPORT: [
     { to: '/support/appeals', label: '申诉工单' },
-    { to: '/support/claims', label: '工伤理赔' },
+    { to: '/support/injuries', label: '工伤与报案' },
     { to: '/support/risk', label: '风险画像' },
   ],
 };
@@ -71,20 +77,23 @@ function Shell() {
           <Route path="/jobs" element={<JobHall />} />
           <Route path="/jobs/:id" element={<JobDetail />} />
           <Route path="/my/tasks" element={<MyTasks />} />
+          <Route path="/my/injuries" element={<MyInjuries />} />
           <Route path="/my/appeals" element={<MyAppeals />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/room/:id" element={<TaskRoom />} />
+          <Route path="/injuries/:id" element={<InjuryCasePage />} />
 
           <Route path="/ent" element={<EntDashboard />} />
           <Route path="/ent/post" element={<PostJob />} />
           <Route path="/ent/jobs" element={<ManageJobs />} />
           <Route path="/ent/jobs/:id/applicants" element={<JobApplicants />} />
           <Route path="/ent/appeals" element={<EntAppeals />} />
+          <Route path="/ent/injuries" element={<EntInjuries />} />
           <Route path="/ent/field" element={<FieldBoard />} />
 
           <Route path="/support/appeals" element={<SupportAppeals />} />
           <Route path="/support/appeals/:id" element={<AppealDesk />} />
-          <Route path="/support/claims" element={<ClaimsDesk />} />
+          <Route path="/support/injuries" element={<InjuryDesk />} />
           <Route path="/support/risk" element={<RiskOverview />} />
 
           <Route path="*" element={<Navigate to={home} replace />} />

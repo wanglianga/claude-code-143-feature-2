@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { useAuth } from '../auth';
 import {
-  Alert, Badge, EventTypeTag, Field, Modal, Spinner, StatusBadge,
+  Alert, Badge, CaseStatusBadge, EventTypeTag, Field, Modal, Spinner, StatusBadge,
   fmtDateTime, fmtMoney,
 } from '../components/ui';
 
@@ -12,7 +12,6 @@ const EVENT_TYPES = [
   { key: 'POSITION_CHANGE', label: '岗位调换' },
   { key: 'EARLY_LEAVE', label: '工人早退' },
   { key: 'EXTRA_CARRY', label: '额外搬运' },
-  { key: 'INJURY', label: '工人受伤' },
   { key: 'WAGE_DISPUTE', label: '工资被扣争议' },
   { key: 'OTHER', label: '其他' },
 ];
@@ -88,6 +87,7 @@ export default function TaskRoom() {
       <div className="tabs">
         <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>考勤与保险</button>
         <button className={tab === 'events' ? 'active' : ''} onClick={() => setTab('events')}>作业事件 ({room.events.length})</button>
+        <button className={tab === 'injury' ? 'active' : ''} onClick={() => setTab('injury')}>工伤与报案 ({room.injuryCases.length})</button>
         <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>任务沟通 ({room.messages.length})</button>
         <button className={tab === 'settlement' ? 'active' : ''} onClick={() => setTab('settlement')}>日结结算</button>
       </div>
@@ -136,6 +136,10 @@ export default function TaskRoom() {
 
       {tab === 'events' && (
         <EventsTab room={room} isWorker={isWorker} isField={isField} busy={busy} onAct={act} />
+      )}
+
+      {tab === 'injury' && (
+        <InjuryTab room={room} isWorker={isWorker} isField={isField} busy={busy} onAct={act} />
       )}
 
       {tab === 'chat' && <ChatTab room={room} onSent={load} />}
@@ -298,14 +302,12 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
   const [desc, setDesc] = useState('');
   const [minutes, setMinutes] = useState(60);
   const [newPosition, setNewPosition] = useState('');
-  const [claimAmount, setClaimAmount] = useState(5000);
 
   const submit = async () => {
     await onAct(() => post('/events', {
       assignmentId: room.assignment.id, type, description: desc,
       minutes: ['OVERTIME', 'EARLY_LEAVE', 'EXTRA_CARRY'].includes(type) ? Number(minutes) : undefined,
       newPosition: type === 'POSITION_CHANGE' ? newPosition : undefined,
-      claimAmount: type === 'INJURY' ? Number(claimAmount) : undefined,
       lat: room.job.lat, lng: room.job.lng, photoUrl: `mock://event-${Date.now()}`,
     }), '事件已现场实时上报（服务器时间不可篡改）');
     setOpen(false); setDesc('');
@@ -332,13 +334,16 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
               {e.minutes ? <span className="small">{e.minutes} 分钟</span> : null}
               {e.newPosition ? <span className="small">调至：{e.newPosition}</span> : null}
               <div className="spacer" />
-              {isField && e.status === 'PENDING' && (
+              {isField && e.status === 'PENDING' && e.type !== 'INJURY' && (
                 <div className="row">
                   <button className="btn btn-success btn-sm" disabled={busy}
                     onClick={() => onAct(() => post(`/events/${e.id}/review`, { approve: true, note: '现场确认情况属实' }))}>批准</button>
                   <button className="btn btn-danger btn-sm" disabled={busy}
                     onClick={() => onAct(() => post(`/events/${e.id}/review`, { approve: false, note: '情况不属实' }))}>驳回</button>
                 </div>
+              )}
+              {isField && e.status === 'PENDING' && e.type === 'INJURY' && (
+                <Badge tone="red">请到「工伤与报案」页签确认</Badge>
               )}
             </div>
             <div className="small" style={{ marginTop: 4 }}>{e.description} {e.photoUrl && '📷'}</div>
@@ -365,11 +370,90 @@ function EventsTab({ room, isWorker, isField, busy, onAct }: any) {
           {type === 'POSITION_CHANGE' && (
             <Field label="调换后的新岗位"><input className="input" value={newPosition} onChange={(e) => setNewPosition(e.target.value)} /></Field>
           )}
-          {type === 'INJURY' && (
-            <>
-              <Field label="预估理赔金额（元）"><input className="input" type="number" value={claimAmount} onChange={(e) => setClaimAmount(Number(e.target.value))} /></Field>
-              <Alert kind="info">系统将即时判定事故时点保险是否在保障期内；未完成四重到岗校验的事故不能理赔。</Alert>
-            </>
+          <Alert kind="info">如发生工人受伤等工伤事故，请改到「工伤与报案」页签现场记录（含岗位、现场照片、就医票据与主管确认）。</Alert>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+/* ---------------- 工伤事件与保险报案（任务内闭环） ---------------- */
+function InjuryTab({ room, isWorker, isField, busy, onAct }: any) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    injuryDesc: '', positionAtInjury: room.job.title, hospital: '',
+    medicalExpense: 0, scenePhotos: '', medicalReceipts: '',
+  });
+  const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
+  const canReport = isWorker && ['ACCEPTED', 'CHECKED_IN', 'WORKING'].includes(room.assignment.status)
+    && room.injuryCases.every((c: any) => ['CLOSED', 'SETTLED'].includes(c.status));
+
+  const submit = async () => {
+    await onAct(() => post('/injuries', {
+      assignmentId: room.assignment.id,
+      ...form,
+      medicalExpense: Number(form.medicalExpense) || 0,
+      scenePhotos: form.scenePhotos || `mock://injury-scene-${Date.now()}`,
+      medicalReceipts: form.medicalReceipts || undefined,
+    }), '工伤事件已现场记录（事故时间取服务器时间，不可补录），等待主管确认');
+    setOpen(false);
+    setForm({ injuryDesc: '', positionAtInjury: room.job.title, hospital: '', medicalExpense: 0, scenePhotos: '', medicalReceipts: '' });
+  };
+
+  return (
+    <>
+      <div className="card">
+        <div className="row">
+          <h2 style={{ margin: 0 }}>工伤事件记录（{room.injuryCases.length}）</h2>
+          <div className="spacer" />
+          {canReport && <button className="btn btn-danger" onClick={() => setOpen(true)}>现场记录工伤事件</button>}
+        </div>
+        <Alert kind="warn">
+          必须现场实时记录：事故时间以平台服务器时间为准；记录事故岗位、现场照片、主管确认、就医票据与事故时保险生效状态。
+          日结工资先按事故前已完成工时结算，医疗垫付与责任判定单独跟进。
+        </Alert>
+        {room.injuryCases.length === 0 && <div className="muted small">暂无工伤记录</div>}
+        {room.injuryCases.map((c: any) => (
+          <div key={c.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
+            <div className="row">
+              <Badge tone="red">工伤 #{c.id}</Badge>
+              <b>{c.positionAtInjury}</b>
+              <CaseStatusBadge status={c.status} />
+              {c.coveredAtOccurrence ? <Badge tone="green">事故时保险有效</Badge> : <Badge tone="red">事故时保险未生效</Badge>}
+              {c.attendanceGap && <Badge tone="red">考勤缺失·追查中</Badge>}
+              <div className="spacer" />
+              <span className="small muted">{fmtDateTime(c.occurredAt)}</span>
+              <Link className="btn btn-sm btn-primary" to={`/injuries/${c.id}`}>
+                {isField && c.status === 'DRAFT' ? '主管确认' : '查看/处理'}
+              </Link>
+            </div>
+            <div className="small" style={{ marginTop: 4 }}>{c.injuryDesc}</div>
+            <div className="small muted" style={{ marginTop: 4 }}>
+              {c.hospital && `医院：${c.hospital} · 医疗费 ${fmtMoney(c.medicalExpense)} · `}
+              {c.supervisorConfirmed ? `主管 ${c.supervisor?.name || ''} 已确认` : '主管尚未确认'}
+              {c.claim ? ` · 报案号 ${c.claim.insurerReportNo}（${c.claim.status}）` : ' · 尚未向保险报案'}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {open && (
+        <Modal title="现场记录工伤事件" onClose={() => setOpen(false)}
+          footer={<button className="btn btn-danger" disabled={busy} onClick={submit}>立即记录（不可补录）</button>}>
+          <Alert kind="warn">事故时间将记录为当前服务器时间，岗位/照片/票据等材料请当场填写，事后无法修改事故时间。</Alert>
+          <Field label="受伤经过与伤情（如：搬运桁架时绊倒，扭伤右脚踝，肿胀无法承重）">
+            <textarea className="input" rows={3} value={form.injuryDesc} onChange={(e) => set('injuryDesc', e.target.value)} />
+          </Field>
+          <Field label="事故时所在岗位"><input className="input" value={form.positionAtInjury} onChange={(e) => set('positionAtInjury', e.target.value)} /></Field>
+          <div className="grid grid-2">
+            <Field label="就医医院（如已送医）"><input className="input" value={form.hospital} onChange={(e) => set('hospital', e.target.value)} placeholder="如：上海市第六人民医院" /></Field>
+            <Field label="已发生医疗费用（元）"><input className="input" type="number" value={form.medicalExpense || ''} onChange={(e) => set('medicalExpense', Number(e.target.value))} /></Field>
+          </div>
+          <Field label="现场照片标识（多张逗号分隔，演示可留空自动生成）"><input className="input" value={form.scenePhotos} onChange={(e) => set('scenePhotos', e.target.value)} placeholder="mock://ankle-scene-1,mock://ankle-scene-2" /></Field>
+          <Field label="就医票据标识（挂号/检查/药品，多张逗号分隔）"><input className="input" value={form.medicalReceipts} onChange={(e) => set('medicalReceipts', e.target.value)} placeholder="mock://receipt-clinic,mock://receipt-xray" /></Field>
+          {room.assignment.status === 'ACCEPTED' && (
+            <Alert kind="error">当前任务尚停留在「已录取」、未完成四重到岗确认：仍可记录事故，系统会标记考勤缺失，
+              事故时保险未生效，平台将追查企业未确认到岗对理赔的影响。</Alert>
           )}
         </Modal>
       )}

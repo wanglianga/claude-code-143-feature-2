@@ -6,6 +6,8 @@ export { AttendanceEvent } from './attendance-event.entity';
 export { InsurancePolicy } from './insurance-policy.entity';
 export { JobEvent } from './job-event.entity';
 export { InjuryClaim } from './injury-claim.entity';
+export { InjuryCase } from './injury-case.entity';
+export { InjuryCaseFollowup } from './injury-case-followup.entity';
 export { ChatMessage } from './chat-message.entity';
 export { Settlement } from './settlement.entity';
 export { Appeal } from './appeal.entity';

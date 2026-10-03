@@ -52,7 +52,8 @@ async function login(username, password = '123456') {
   console.log('── 2. 报名门禁：实名 / 健康证 / 历史评价 / 风险告知 ──');
   const jobs = (await req('GET', '/api/jobs', tWorker1)).body;
   const cateringJob = jobs.find((j) => j.industry === 'CATERING');
-  const exhibitionJob = jobs.find((j) => j.industry === 'EXHIBITION');
+  // 主演示岗位可能与种子中的其他会展岗同行业，按标题精确选择
+  const exhibitionJob = jobs.find((j) => j.industry === 'EXHIBITION' && j.title.includes('世博动漫展'));
   const securityJob = jobs.find((j) => j.industry === 'SECURITY');
   ok(!!cateringJob && !!exhibitionJob && !!securityJob, '岗位大厅包含六类行业岗位');
 
@@ -121,18 +122,47 @@ async function login(username, password = '123456') {
   ok(true, '额外搬运事件已审批（计入日结补贴）');
 
   const injury = await req('POST', '/api/events', tWorker1, {
-    assignmentId, type: 'INJURY', description: '搬运桁架时砸伤左脚', claimAmount: 8000,
+    assignmentId, type: 'INJURY',
+    injuryDesc: '会展搭建搬运桁架时踩到地面线缆绊倒，扭伤右脚踝，肿胀无法承重',
+    positionAtInjury: '展台搭建搬运工',
+    scenePhotos: 'mock://ankle-scene-1,mock://ankle-scene-2',
+    hospital: '上海市第六人民医院', medicalReceipts: 'mock://receipt-clinic', medicalExpense: 860,
   });
-  ok(injury.body.claim.coveredAtOccurrence === true && injury.body.claim.status === 'INVESTIGATING',
-    '作业中受伤且保险在保障期内 → 自动生成可理赔调查单');
-  const injuryReview = await req('POST', `/api/events/${injury.body.event.id}/review`, tSup1, { approve: true, note: '现场目击属实' });
-  ok(injuryReview.body.claim.status === 'APPROVED', '主管确认工伤 → 理赔通过');
+  const case0 = injury.body.injuryCase;
+  ok(injury.status === 201 && case0.status === 'DRAFT' && case0.coveredAtOccurrence === true
+    && case0.attendanceGap === false && case0.positionAtInjury === '展台搭建搬运工',
+    `作业中受伤：现场记录事故时间/岗位/照片/就医票据，事故时保险在保障期内（案件 #${case0?.id}，待主管确认）`);
+  const injuryEventId = injury.body.event.id;
+  const injuryCaseId = case0.id;
+
+  // 主管确认工伤事件（作业事件审批入口与工伤案件联动）
+  const injuryReview = await req('POST', `/api/events/${injuryEventId}/review`, tSup1, { approve: true, note: '现场目击属实，地面线缆未防护' });
+  ok(injuryReview.body.injuryCase.status === 'CONFIRMED' && injuryReview.body.event.status === 'APPROVED',
+    '主管确认工伤属实 → 案件进入待报案，作业事件同步 APPROVED');
+
+  // 客服根据记录发起保险报案
+  const fileReport = await req('POST', `/api/injuries/${injuryCaseId}/report-insurance`, tSupport, { claimAmount: 6800, note: '脚踝韧带损伤' });
+  ok(fileReport.status === 201 && fileReport.body.status === 'CLAIM_TRACKING'
+    && fileReport.body.claim.status === 'REPORTED' && /^BX/.test(fileReport.body.claim.insurerReportNo),
+    `客服发起保险报案，报案号 ${fileReport.body.claim?.insurerReportNo}，进入理赔资料跟进`);
+
+  // 客服勾选已收资料，未齐 → 理赔单 WAITING_DOCS
+  const mat = await req('POST', `/api/injuries/${injuryCaseId}/materials`, tSupport, {
+    patch: { accidentNotice: true, medicalRecord: true, attendanceProof: true, supervisorStatement: true, idCopy: true },
+  });
+  ok(mat.body.claim.status === 'WAITING_DOCS' && mat.body.missingMaterials.includes('医疗票据')
+    && mat.body.missingMaterials.includes('企业责任意见'),
+    `理赔资料清单跟踪：仍缺 ${mat.body.missingMaterials.join('、')}`);
+
+  // 未报案不能直接登记资料（防跳过报案流程）
+  const noReport = await req('POST', `/api/injuries/${injuryCaseId}/report-insurance`, tSupport, {});
+  ok(noReport.status === 400 && /已发起/.test(noReport.body.message), '同一工伤事件不能重复报案');
 
   const msg = await req('POST', `/api/assignments/${assignmentId}/messages`, tWorker1, { content: '主管，加班的工时记得帮我确认' });
   const msg2 = await req('POST', `/api/assignments/${assignmentId}/messages`, tSup1, { content: '已确认，安心干活' });
   ok(msg.status === 201 && msg2.status === 201, '任务内聊天留存（争议证据链）');
 
-  console.log('── 6. 保险不可事后补录（未到岗先受伤 → 不能立案为保险事故） ──');
+  console.log('── 6. 企业未确认到岗：考勤缺失事故可记录但保险不赔，平台追查企业责任 ──');
   // 新工人：注册+实名+健康证+人脸
   const uname = `wnew${Date.now() % 100000}`;
   const reg = await req('POST', '/api/auth/register', null, {
@@ -141,11 +171,11 @@ async function login(username, password = '123456') {
   });
   const tNew = reg.body.token;
   await req('POST', '/api/auth/worker-profile', tNew, { faceSampleUrl: 'mock://face-new' });
-  // 企业新发一个岗并录取该工人
-  const sStart = new Date(Date.now() + 2 * 86400000);
-  const sEnd = new Date(sStart.getTime() + 8 * 3600000);
+  // 企业新发一个进行中的岗位并录取该工人（开工 90 分钟前、7 小时后收工）
+  const sStart = new Date(Date.now() - 90 * 60000);
+  const sEnd = new Date(Date.now() + 6 * 3600000);
   const newJob = (await req('POST', '/api/jobs', tEnt1, {
-    title: '次日仓库分拣', industry: 'WAREHOUSE', description: '分拣', location: '嘉定物流园',
+    title: '在途仓库分拣', industry: 'WAREHOUSE', description: '分拣', location: '嘉定物流园',
     lat: 31.2304, lng: 121.4737,
     startTime: sStart.toISOString().slice(0, 19), endTime: sEnd.toISOString().slice(0, 19),
     headcount: 1, skillRequirement: '无', dailyWage: 240,
@@ -154,23 +184,48 @@ async function login(username, password = '123456') {
   const newApps = (await req('GET', `/api/jobs/${newJob.id}/applicants`, tEnt1)).body;
   const newAccept = await req('POST', `/api/assignments/${newApps[0].id}/review`, tEnt1, { accept: true });
   const newAid = newAccept.body.id;
-  // 未完成任何到岗校验，直接报受伤 → 系统拒绝（保险 PENDING）
+  // 未完成四重到岗确认（企业未按要求确认到岗），工人仍可记录事故：
+  // 平台不让考勤缺失导致事故无记录，但事故时保险未生效、标记考勤缺失待追查
   const earlyInjury = await req('POST', '/api/events', tNew, {
-    assignmentId: newAid, type: 'INJURY', description: '还没到岗就受伤了想走保险',
+    assignmentId: newAid, type: 'INJURY', injuryDesc: '还没完成到岗确认就抬货扭伤脚踝',
+    positionAtInjury: '分拣搬运', medicalExpense: 300,
   });
-  ok(earlyInjury.status === 400 && /作业中/.test(earlyInjury.body.message),
-    `未到岗（保险未生效）不能报工伤立案：${earlyInjury.body.message}`);
+  const gapCase = earlyInjury.body.injuryCase;
+  ok(earlyInjury.status === 201 && gapCase.coveredAtOccurrence === false
+    && gapCase.attendanceGap === true && gapCase.attendanceGapResult === 'PENDING'
+    && gapCase.policyStatusAtOccurrence === 'PENDING',
+    '未确认到岗的事故允许记录（企业未确认→考勤缺失追查），但事故时保险未生效');
 
-  // 数据层面：即使存在 coveredAtOccurrence=false 的理赔单，客服也无权改赔
+  // 主管确认现场属实（承认工人实际到岗但当时没在系统确认）
+  await req('POST', `/api/events/${earlyInjury.body.event.id}/review`, tSup1, {
+    approve: true, note: '他确实到岗了，当时忙没在系统点确认',
+  });
+  // 未完成考勤追查前不能先行结算
+  const settleBeforeTrace = await req('POST', `/api/injuries/${gapCase.id}/settle-wages`, tSupport);
+  ok(settleBeforeTrace.status === 400 && /追查/.test(settleBeforeTrace.body.message),
+    `考勤缺失未追查前不能结算工资：${settleBeforeTrace.body.message}`);
+  // 客服报案 → 保险拒赔（不可改赔），转企业责任/医疗垫付跟进
+  const gapReport = await req('POST', `/api/injuries/${gapCase.id}/report-insurance`, tSupport, { claimAmount: 3000 });
+  ok(gapReport.body.claim.status === 'REJECTED' && /未生效/.test(gapReport.body.claim.adjusterNote),
+    '事故时保单 PENDING → 保险拒赔，医疗垫付与企业责任另案跟进');
+  // 平台追查：企业承认实际到岗未确认 → 保险缺口由企业承担（判企业全责）
+  const trace = await req('POST', `/api/injuries/${gapCase.id}/attendance-gap`, tSupport, {
+    result: 'CONFIRMED_ARRIVAL', note: '主管与班组记录均证明工人已到岗，企业漏确认',
+  });
+  ok(trace.body.attendanceGapResult === 'CONFIRMED_ARRIVAL' && trace.body.liability === 'ENTERPRISE'
+    && trace.body.enterpriseLiabilityPct === 100,
+    '追查确认企业未按要求确认到岗：保险缺口由企业承担，判定企业全责');
+  // 追查后可按认定到岗时间（开工时间）起算已完成工时
+  const gapSettle = await req('POST', `/api/injuries/${gapCase.id}/settle-wages`, tSupport);
+  ok(gapSettle.status === 201 && Number(gapSettle.body.settlement.workMinutes) > 0
+    && Number(gapSettle.body.settlement.insurancePremium) === 0,
+    `追查后按已完成工时 ${gapSettle.body.settlement?.workMinutes} 分钟结算工资，未生效保单不计保费`);
+
+  // 数据层面铁律：即使存在 coveredAtOccurrence=false 的理赔单，客服也无权改赔
   const mysql = await import('mysql2/promise');
   const conn = await mysql.createConnection({
     host: DB.host, port: DB.port, user: DB.user, password: DB.password, database: DB.database,
   });
-  const [pl] = await conn.query('SELECT id FROM insurance_policies WHERE assignmentId = ?', [newAid]);
-  await conn.query(
-    'INSERT INTO injury_claims (assignmentId, jobId, workerId, enterpriseId, jobEventId, insurancePolicyId, injuryDesc, claimAmount, status, coveredAtOccurrence, createdAt) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())',
-    [newAid, newJob.id, newApps[0].workerId, newJob.enterpriseId, 0, pl[0].id, '事故时未到岗', 5000, 'REPORTED', 0],
-  );
   const [uncoveredRows] = await conn.query(
     'SELECT id FROM injury_claims WHERE assignmentId = ? AND coveredAtOccurrence = 0 ORDER BY id DESC LIMIT 1', [newAid],
   );
@@ -212,6 +267,64 @@ async function login(username, password = '123456') {
   const after = (await req('GET', `/api/settlements/assignment/${assignmentId}`, tWorker1)).body;
   ok(Number(after.workerPayable) === beforePay + 50 && after.status === 'ADJUSTED',
     `结算单调整为 ADJUSTED，应发 ¥${beforePay} → ¥${after.workerPayable}`);
+
+  console.log('── 8b. 工资结清后工伤仍持续跟进：垫付/医院补票/企业意见/责任/结案 ──');
+  // 工资（含申诉补发）已结清，但工伤案件仍是跟进中 → 工作台必须能发现，不允许无人跟进
+  const stats0 = (await req('GET', '/api/support/injuries/stats', tSupport)).body;
+  const deskRows = (await req('GET', '/api/support/injuries', tSupport)).body;
+  const mainRow = deskRows.find((c) => c.id === injuryCaseId);
+  ok(stats0.wagesPaidButOpen >= 1 && mainRow.settlementPaid === true
+    && !['SETTLED', 'CLOSED'].includes(mainRow.status),
+    `工资已结清但工伤未结：客服台标记「工资已结·事故未结」${stats0.wagesPaidButOpen} 件，防止无人跟进`);
+
+  // 企业登记医疗垫付 800（与工资分开记账）
+  const advance = await req('POST', `/api/injuries/${injuryCaseId}/advance`, tEnt1, {
+    source: 'ENTERPRISE', amount: 800, note: '现场垫付急诊与检查费',
+  });
+  ok(advance.body.advanceSource === 'ENTERPRISE' && Number(advance.body.advanceAmount) === 800
+    && advance.body.advanceRecoveryStatus === 'PENDING',
+    '企业登记医疗垫付 ¥800（待理赔款抵扣，不进日结工资）');
+
+  // 企业提交责任意见（自认 80%）
+  const opinion = await req('POST', `/api/injuries/${injuryCaseId}/enterprise-opinion`, tEnt1, {
+    opinion: '现场线缆防护不到位，企业认可主要责任', acceptedPct: 80,
+  });
+  ok(opinion.body.enterpriseOpinionSubmitted === true || opinion.body.enterpriseOpinionAt,
+    '企业责任意见已提交（同步进入理赔资料清单）');
+
+  // 医院补票：正式发票补开 → 医疗票据资料收齐
+  const receipt = await req('POST', `/api/injuries/${injuryCaseId}/followups`, tWorker1, {
+    type: 'HOSPITAL_RECEIPT', content: '第六人民医院补开正式发票一张', amount: 860,
+    attachments: 'mock://hospital-invoice-final',
+  });
+  ok(receipt.body.claim.hospitalReceiptStatus === 'SUPPLEMENTED'
+    && receipt.body.claim.materials.receipts === true,
+    '医院补票登记后，理赔资料「医疗票据」更新为已收');
+
+  // 客服补齐企业责任意见材料 → 资料齐全，理赔单 DOCS_SUBMITTED
+  const matAll = await req('POST', `/api/injuries/${injuryCaseId}/materials`, tSupport, {
+    patch: { receipts: true, enterpriseOpinion: true },
+  });
+  ok(matAll.body.claim.status === 'DOCS_SUBMITTED' && matAll.body.missingMaterials.length === 0,
+    '理赔资料全部收齐（事故说明/病历/票据/考勤/主管说明/企业意见/证件）→ 提交保险审核');
+
+  // 平台责任判定：多方分担，企业 80%
+  const liability = await req('POST', `/api/injuries/${injuryCaseId}/liability`, tSupport, {
+    liability: 'JOINT', enterprisePct: 80, note: '企业线缆防护缺失负主要责任，工人未注意路况负次要责任',
+  });
+  ok(liability.body.liability === 'JOINT' && liability.body.enterpriseLiabilityPct === 80
+    && !!liability.body.liabilityDecidedAt, '平台完成责任判定（多方分担·企业 80%），与工资结算互不影响');
+
+  // 保险赔付结案，垫付从理赔款抵扣返还
+  const close = await req('POST', `/api/injuries/${injuryCaseId}/close`, tSupport, {
+    outcome: 'SETTLED', payoutAmount: 5200, note: '保险核定赔付到账，企业垫付已抵扣',
+  });
+  ok(close.body.status === 'SETTLED' && Number(close.body.insurancePayout) === 5200
+    && close.body.claim.status === 'APPROVED', '保险理赔结案：赔付 ¥5200，案件闭环');
+  const recovered = await req('POST', `/api/injuries/${injuryCaseId}/advance/resolve`, tSupport, {
+    status: 'RECOVERED', note: '理赔到账抵扣企业垫付',
+  });
+  ok(recovered.body.advanceRecoveryStatus === 'RECOVERED', '企业医疗垫付 ¥800 已由理赔款抵扣返还');
 
   console.log('── 9. 高风险企业：更高保证金 + 更严格现场确认（双人） ──');
   const overview = (await req('GET', '/api/support/overview', tSupport)).body;
